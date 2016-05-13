@@ -1,0 +1,275 @@
+#! /usr/bin/perl -w
+    eval 'exec /usr/bin/perl -S $0 ${1+"$@"}'
+        if 0; #$running_under_some_shell
+
+# Filename: test/test-01
+# Project: pmmv
+# Brief: Test encodings, functional notation and function chaining
+#
+# Copyright (C) 2016 Guy Shaw
+# Written by Guy Shaw <gshaw@acm.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as
+# published by the Free Software Foundation; either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+=pod
+
+=begin description
+
+## <<description>> ##
+
+=end description
+
+=cut
+
+BEGIN { push(@INC, '.'); }
+
+require 5.0;
+use strict;
+use warnings;
+use Carp;
+use diagnostics;
+use Getopt::Long;
+use File::Spec::Functions qw(splitpath catfile);
+use Cwd qw(getcwd);
+
+use libtest;
+
+my $debug   = 0;
+my $verbose = 0;
+
+my $program;
+my $exe;
+my $test_path;
+my $test_name;
+my $subtest;
+my $start_dir;
+
+my @options = (
+    'debug'   => \$debug,
+    'verbose' => \$verbose,
+);
+
+#:subroutines:#
+
+sub snarf_file {
+    my ($fname) = @_;
+    my $fh;
+    my $whole_file;
+    my $buf;
+    my $nread;
+
+    if (!open($fh, '<', $fname)) {
+        return "*** ERROR ***\n";
+    }
+
+    $whole_file = '';
+    while (($nread = sysread($fh, $buf, 1000000000)) != 0) {
+        $whole_file .= $buf;
+    }
+
+    close $fh;
+
+    return $whole_file;
+}
+
+sub names_and_contents {
+    my $all_contents = '';
+    for my $fname (@_) {
+        my $contents;
+        $all_contents .= $fname . "\n";
+        $contents = snarf_file($fname);
+        $all_contents .= $contents;
+    }
+    return $all_contents;
+}
+
+sub run_pmmv {
+    my ($script, $before_fname) = @_;
+
+    my $child = fork();
+
+    if (!defined($child)) {
+        eprint "fork() failed; $!\n";
+        exit 2;
+    }
+
+    if ($child == 0) {
+        close *STDOUT;
+        close *STDERR;
+        open(*STDOUT, '>', 'pmmv.out');
+        open(*STDERR, '>', 'pmmv.err');
+        exec($exe, '--builtin', $script, $before_fname);
+    }
+
+    wait;
+    my $rc = $?;
+    my $exit   = ($rc >> 8) & 0xff;
+    my $signal = $rc & 0xff;
+    my $err = 0;
+
+    print "signal=${signal}, exit=${exit}.\n";
+
+    if ($exit != 0) {
+        show_file('pmmv.out');
+    }
+
+    if ($exit != 0) {
+        eprint "${program} returned exit status ${exit}.\n";
+        eprint "Expected status: 0\n";
+        $err = 1;
+    }
+
+    if (0 && -s 'pmmv.out') {
+        print "Unexpected message on stdout.\n";
+        show_file('pmmv.out');
+        $err = 1;
+    }
+
+    if (0 && -s 'pmmv.err') {
+        print "Unexpected message on stderr.\n";
+        show_file('pmmv.err');
+        $err = 1;
+    }
+
+    return ($err);
+}
+
+sub start_test {
+    if (!chdir($start_dir)) {
+        eprint "chdir('${start_dir}') failed; $!.\n";
+        exit 2;
+    }
+
+    fresh_tmpdir();
+
+    if (!chdir('tmp')) {
+        eprint "chdir('tmp') failed; $!.\n";
+        exit 2;
+    }
+}
+
+sub expect_no_exist {
+    my $fname;
+    my $any_exist = 0;
+
+    for $fname (@_) {
+        if (-e $fname) {
+            eprint "File '${fname}' exists, but it should not.\n";
+            $any_exist = 1;
+        }
+    }
+    return $any_exist;
+}
+
+sub expect_files {
+    my $fname;
+    my $any_err = 0;
+
+    for $fname (@_) {
+        if (! -e $fname) {
+            eprint "File '${fname}' does not exist, but it should.\n";
+            $any_err = 1;
+        }
+        elsif (! -f $fname) {
+            eprint "File '${fname}' should be a regular file, but it is not.\n";
+            system('ls', '-dlh', $fname);
+            $any_err = 1;
+        }
+    }
+    return $any_err;
+}
+
+#:options:#
+
+set_print_fh();
+
+GetOptions(@options) or exit 2;
+
+#:main:#
+
+$start_dir = getcwd();
+
+$test_path = $0;
+$test_name = sname($test_path);
+$program = 'pmmv';
+$exe = catfile('../..', $program);
+
+my $count_err = 0;
+my $err;
+my $before_fname;
+my $after_fname;
+my $script;
+
+$subtest = 'lc';
+$before_fname = 'This-IS-A-TEST';
+$after_fname  = 'this-is-a-test';
+$script = 'lc';
+start_test();
+write_new_file($before_fname, "Hello\n");
+$err = run_pmmv($script, $before_fname);
+$err ||= expect_no_exist($before_fname);
+$err ||= expect_files($after_fname);
+show_test_results($test_name, $subtest, $err);
+$count_err += ($err ? 1 : 0);
+
+$subtest = 'hyphenate';
+$before_fname = 'This is a test';
+$after_fname = 'This-is-a-test';
+$script = 'hyphenate_array';
+start_test();
+write_new_file($before_fname, "Hello\n");
+$err = run_pmmv($script, $before_fname);
+$err ||= expect_no_exist($before_fname);
+$err ||= expect_files($after_fname);
+show_test_results($test_name, $subtest, $err);
+$count_err += ($err ? 1 : 0);
+
+$subtest = 'hyphenate+lc';
+$before_fname = 'This is a test';
+$after_fname = 'this-is-a-test';
+$script = 'hyphenate_array(lc($_));';
+start_test();
+write_new_file($before_fname, "Hello\n");
+$err = run_pmmv($script, $before_fname);
+$err ||= expect_no_exist($before_fname);
+$err ||= expect_files($after_fname);
+show_test_results($test_name, $subtest, $err);
+$count_err += ($err ? 1 : 0);
+
+$subtest = 'hyphenate . lc';
+$before_fname = 'This is a test';
+$after_fname = 'this-is-a-test';
+$script = 'hyphenate_array . lc';
+start_test();
+write_new_file($before_fname, "Hello\n");
+$err = run_pmmv($script, $before_fname);
+$err ||= expect_no_exist($before_fname);
+$err ||= expect_files($after_fname);
+show_test_results($test_name, $subtest, $err);
+$count_err += ($err ? 1 : 0);
+
+exit ($count_err != 0 ? 1 : 0);
+__END__
+
+./pmmv -n lc This-IS-A-TEST
+./pmmv -n lc 'this is a test'
+
+./pmmv -n hyphenate_array  'This is a test'
+./pmmv -n 'hyphenate_array(lc($_));'  'This is a test'
+./pmmv -n '$_ = hyphenate_array(lc($_));'  'This is a test'
+
+# Test of function chain notation
+#
+./pmmv -n 'hyphenate_array . lc'  'This is a test'
+

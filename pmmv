@@ -1,0 +1,409 @@
+#! /usr/bin/perl -w
+    eval 'exec /usr/bin/perl -S $0 ${1+"$@"}'
+        if 0; #$running_under_some_shell
+
+# Filename: pmmv
+# Brief: Like Debian 'rename', but designed to feed from->to pairs to libmmv
+#
+# Copyright (C) 2016 Guy Shaw
+# Written by Guy Shaw <gshaw@acm.org>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU Lesser General Public License as
+# published by the Free Software Foundation; either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
+=pod
+
+=begin description
+
+pmmv - perl front-end to mmv -- renames multiple files
+
+=end description
+
+=cut
+
+require 5.0;
+use strict;
+use warnings;
+use Carp;
+use diagnostics;
+use Getopt::Long;
+use File::Spec::Functions;
+use MIME::QuotedPrint;
+
+Getopt::Long::Configure('bundling');
+
+my $eprint_fh = *STDERR;
+my $dprint_fh = *STDERR;
+
+my $verbose = 0;
+my $debug   = 0;
+my $no_act  = 0;
+my $opt_k   = 0; # Like make -k -- keep working even in the presence of errors
+my $force   = 0;
+
+my $opt_builtin = 0;
+my $opt_shell   = 0;
+my $opt_null    = 0;
+my $opt_qp      = 0;
+my $opt_xnn     = 0;
+
+my $wsep = '-';
+
+my %options = (
+    'f|force'    => \$force,
+    'k|continue' => \$opt_k,
+    'n|no-act'   => \$no_act,
+    'simulate'   => \$no_act,
+    'v|verbose'  => \$verbose,
+    'd|debug'    => \$debug,
+    'builtin'    => \$opt_builtin,
+    'shell'      => \$opt_shell,
+    'null'       => \$opt_null,
+    'qp'         => \$opt_qp,
+    'xnn'        => \$opt_xnn,
+);
+
+my $op;
+
+#:subroutines:#
+
+# Decide how to direct eprint*() and dprint*() functions.
+# If STDOUT and STDERR are directed to the same "channel",
+# then eprint*() and dprint*() should be tied to the same file handle.
+#
+# Otherwise, buffering could cause a mix of STDOUT and STDERR to
+# be written out of order.
+#
+sub set_print_fh {
+    my @stdout_statv;
+    my @stderr_statv;
+    my $stdout_chan;
+    my $stderr_chan;
+
+    @stdout_statv = stat(*STDOUT);
+    @stderr_statv = stat(*STDERR);
+    $stdout_chan = join(':', @stdout_statv[0, 1, 6]);
+    $stderr_chan = join(':', @stderr_statv[0, 1, 6]);
+    if (!defined($eprint_fh)) {
+        $eprint_fh = ($stderr_chan eq $stdout_chan) ? *STDOUT : *STDERR;
+    }
+    if (!defined($dprint_fh)) {
+        $dprint_fh = ($stderr_chan eq $stdout_chan) ? *STDOUT : *STDERR;
+    }
+}
+
+sub eprint {
+    print {$eprint_fh} @_;
+}
+
+sub eprintf {
+    printf {$eprint_fh} @_;
+}
+
+sub dprint {
+    print {$dprint_fh} @_ if ($debug);
+}
+
+sub dprintf {
+    printf {$dprint_fh} @_ if ($debug);
+}
+
+sub shell_quote {
+    my ($str) = @_;
+
+    if ($str !~ m{\A[-A-Za-z0-9_/.,+=%]+\z}msx) {
+        $str =~ s{'}{'\\''}gmsx;
+        return q{'} . $str . q{'};
+    }
+    $str;
+}
+
+sub vis_char {
+    my $chr = substr($_[0], 0, 1);
+    if ($chr eq ' ') {
+        return ' ';
+    }
+    return sprintf('\x%02x', ord($chr));
+}
+
+sub vis_string {
+    my ($str) = @_;
+    if (!defined($str)) {
+        return '<undef>';
+    }
+    $str =~ s{([^[:graph:]])}{vis_char($1)}egmsx;
+    return $str;
+}
+
+sub encode_xnn {
+    return vis_string(@_);
+}
+
+sub hyphenate_word {
+    my ($word) = @_;
+
+    $word =~ s{\A\W+}{}msx;
+    $word =~ s{\W+\z}{}msx;
+    $word =~ s{\W+}{$wsep}gmsx;
+    return $word;
+}
+
+sub hyphenate_array {
+    my $last_word;
+    my $ext;
+    my @resultv;
+
+    if (scalar(@_) == 0) {
+        return '';
+    }
+    dprint 'hyphenate_array', '(', join(', ', @_), ')', "\n";
+    $last_word = pop(@_);
+    if ($last_word =~ m{\.([A-Za-z0-9]+)\z}msx) {
+        $ext = '.' . $1;
+        $last_word = $`;
+    }
+    else {
+        $ext = '';
+    }
+    push(@_, $last_word);
+    @resultv = ();
+    for my $w (@_) {
+        my $h = hyphenate_word($w);
+        push(@resultv, $h);
+    }
+    if ($ext ne '') {
+        $resultv[$#resultv] .= $ext;
+    }
+    return join($wsep, @resultv);
+}
+
+sub chain_to_call {
+    my ($op) = @_;
+    my $c = $op;
+    $c =~ s{\A\.\s*}{}msx;
+    my @chain = split(/\s*\.\s*/, $c);
+    my $subject = '$_';
+    for my $func (reverse @chain) {
+        if ($func =~ m{\A[_A-Za-z][_A-Za-z0-9]*\z}msx) {
+            $subject = $func . '(' . $subject . ')';
+        }
+        else {
+            return $op;
+        }
+    }
+    return '$_ = ' . $subject . ';';
+}
+
+sub do_rename {
+    my ($fnamev_ref, $op, $act) = @_;
+    my $fname;
+    my $err = 0;
+    local ($_);
+
+    for $fname (@$fnamev_ref) {
+        my ($src, $dst);
+
+        $src = $fname;
+        $_ = $fname;
+        eval $op;
+        if ($@) {
+            eprint($@, "\n", '  ', '{ ', $op, ' }', "\n");
+            die ' ';
+        }
+        if ($_ eq $fname) {
+            my $code = '$_ = ' . $op . '($_);';
+            dprintf("code=[%s]\n", $code);
+            eval $code;
+            if ($@) {
+                eprint($@, "\n", '  ', '{ ', $op, ' }', "\n");
+                die ' ';
+            }
+        }
+        $dst = $_;
+        next  if ($src eq $dst);    # Ignore quietly
+
+        my $vsrc = '[' . vis_string($src) . ']';
+        my $vdst = '[' . vis_string($dst) . ']';
+        if (-e $dst && !$force) {
+            warn  "${vsrc} not renamed: ${vdst} already exists.\n";
+            $err = 1;
+            next;
+        }
+
+        if (! $act && $verbose) {
+            eprint('  ', $vsrc, ' -> ', $vdst, "\n");
+        }
+
+        next unless ($act);
+
+        if ($opt_builtin) {
+            if (rename($src, $dst)) {
+                eprint("rename(${vsrc}, ${vdst})\n")  if $verbose;
+            }
+            else {
+                warn "rename(${vsrc}, ${vdst}) failed: $!\n";
+            }
+        }
+        elsif ($opt_shell) {
+            print 'mv ', shell_quote($src), ' ', shell_quote($dst), "\n";
+        }
+        elsif ($opt_null) {
+            print $src, "\000", $dst, "\000";
+        }
+        elsif ($opt_qp) {
+            print encode_qp($src), "\n", encode_qp($dst), "\n";
+        }
+        elsif ($opt_xnn) {
+            print encode_xnn($src), "\n", encode_xnn($dst), "\n";
+        }
+    }
+
+    return $err;
+}
+
+#:options:#
+
+if (GetOptions(%options)) {
+    $op = shift;
+}
+else {
+    die "Usage: $0 [-v] [-n] [-f] [-k] perlexpr [filenames]\n"
+}
+
+if ($no_act) {
+    $verbose = 1;
+}
+
+my $opts = $opt_builtin + $opt_shell + $opt_null + $opt_qp + $opt_xnn;
+if ($opts == 0) {
+    $opt_null = 1;
+}
+elsif ($opts >= 2) {
+    eprint "Must choose only one of the encodings:\n";
+    eprint "  --builtin, --shell, --null, --qp, --xnn.\n";
+    exit 2;
+}
+
+#:main:#
+
+set_print_fh();
+
+my $old_op = $op;
+$op = chain_to_call($op);
+if ($op ne $old_op) {
+    eprint "op: [${old_op}] ==> [${op}]\n";
+}
+
+if (scalar(@ARGV) == 0) {
+    print "reading filenames from STDIN\n"  if ($verbose);
+    @ARGV = <STDIN>;
+    chop(@ARGV);
+}
+
+my $err;
+
+# Pass 1 -- Do feasibility study
+#
+
+$err = do_rename(\@ARGV, $op, 0);
+
+if ($err > 0 && !$opt_k) {
+    eprint("No changes have been applied.\n");
+    exit 1;
+}
+
+if ($no_act) {
+    exit 0;
+}
+
+$err = do_rename(\@ARGV, $op, 1);
+
+if ($err > 0) {
+    exit 1;
+}
+
+exit 0;
+__END__
+
+=head1 NAME
+
+pmmv - perl front-end to mmv -- renames multiple files
+
+=head1 SYNOPSIS
+
+B<pmmv> S<[ B<-v> ]> S<[ B<-n> ]> S<[ B<-f> ]> I<perlexpr> S<[ I<files> ]>
+
+=head1 DESCRIPTION
+
+C<pmmv>
+renames the filenames supplied according to the rule specified as the
+first argument.
+The I<perlexpr>
+argument is a Perl expression which is expected to modify the C<$_>
+string in Perl for at least some of the filenames specified.
+If a given filename is not modified by the expression, it will not be
+renamed.
+If no filenames are given on the command line, filenames will be read
+via standard input.
+
+For example, to rename all files matching C<*.bak> to strip the extension,
+you might say
+
+    pmmv 's/\.bak$//' *.bak
+
+To translate uppercase names to lower, you'd use
+
+    pmmv 'y/A-Z/a-z/' *
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<-v>, B<--verbose>
+
+Verbose: print names of files successfully renamed.
+
+=item B<-n>, B<--no-act>
+
+No Action: show what files would have been renamed.
+
+=item B<-f>, B<--force>
+
+Force: overwrite existing files.
+
+=back
+
+=head1 ENVIRONMENT
+
+No environment variables are used.
+
+=head1 AUTHOR
+
+Larry Wall   Original Perl rename
+Guy Shaw     Modifications to make 'pmmv'
+
+=head1 SEE ALSO
+
+mv(1), mmv(1), perl(1)
+
+=head1 DIAGNOSTICS
+
+If you give an invalid Perl expression you'll get a syntax error.
+
+=head1 BUGS
+
+The original C<rename> did not check for the existence of target filenames,
+so had to be used with care.  I hope I've fixed that (Robin Barker).
+
+=cut
