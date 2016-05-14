@@ -6,9 +6,9 @@ The perl `rename` command found in some Linux distributions
 shows that perl has a great deal of expressive power,
 and so it can lead people to believe that it makes for a
 useful bulk rename utility.
-All that expressive power is great planning
+All that expressive power is great for planning
 the transformations of filenames,
-it does not do the heavy lifting of analyzing the whole list of
+but it does not do the heavy lifting of analyzing the whole list of
 from`->`to filename pairs for potential collisions,
 cycles, or other problems that can make the entire move/rename
 operation infeasible.
