@@ -3,11 +3,12 @@
 ### The Problem
 
 The perl `rename` command found in some Linux distributions
-show that perl has a great deal of expressive power,
+shows that perl has a great deal of expressive power,
 and so it can lead people to believe that it makes for a
-useful bulk rename utility.  But all that expressive power
-is good planning the trasnformation of filenames, it does not
-do the heavy lifting of analyzing the whole list of
+useful bulk rename utility.
+All that expressive power is great planning
+the transformations of filenames,
+it does not do the heavy lifting of analyzing the whole list of
 from`->`to filename pairs for potential collisions,
 cycles, or other problems that can make the entire move/rename
 operation infeasible.
@@ -46,15 +47,14 @@ and of general-purpose programming languages
 that have pure functions and assignment statements.
 
 As an experiment, `pmmv` takes purely functional
-notation and translates it into an assignement
-statement.
+notation and translates it into an assignment statement.
 
 For example, the perl function, 'lc',
 is just a function; it does not modify its
 argument.  So, it would not make sense
 to use the `rename` command with just the function name.
 But, `pmmv` will notice that the given expression produces not change,
-and translate the given expression into an assignement statement.
+and translate the given expression into an assignment statement.
 
 The command:
 
@@ -82,17 +82,16 @@ into:
     $_ = function_g(function_f($_));
 ```
 
-#### Builtin hyphenate support
+#### Built-in hyphenate support
 
 To do hyphenation properly takes
 more than just `s/\s/-/g`.
 
-So, `pmmv` has one addtional function
-built-in, `hyphenate_array`.
+So, `pmmv` has one additional function built-in, `hyphenate_array`.
 It takes an array of words
-and translates a lot of unsafe puctuation characters,
+and translates a lot of unsafe punctuation characters,
 as well as white space, and then collapses
-run of hyphens into one.
+runs of hyphens into one.
 
 
 ## Encodings
