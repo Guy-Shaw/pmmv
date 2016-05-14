@@ -18,7 +18,8 @@ but its pattern matching language is pretty basic.
 
 `pmmv` is a variant of the perl `rename` program
 that is designed to work with `mmv`.  It is also
-design to work with the `libmmv`-based program, `mmv-pairs`,
+designed to work with `mmv-pairs`,
+the variant of `mmv` based on `libmmv`,
 which can take nul-terminated lines as {from`->`to}
 filename pairs, and can take other encodings
 of "raw" pairs of source and destination file names.
