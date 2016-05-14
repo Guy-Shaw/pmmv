@@ -260,16 +260,3 @@ show_test_results($test_name, $subtest, $err);
 $count_err += ($err ? 1 : 0);
 
 exit ($count_err != 0 ? 1 : 0);
-__END__
-
-./pmmv -n lc This-IS-A-TEST
-./pmmv -n lc 'this is a test'
-
-./pmmv -n hyphenate_array  'This is a test'
-./pmmv -n 'hyphenate_array(lc($_));'  'This is a test'
-./pmmv -n '$_ = hyphenate_array(lc($_));'  'This is a test'
-
-# Test of function chain notation
-#
-./pmmv -n 'hyphenate_array . lc'  'This is a test'
-
