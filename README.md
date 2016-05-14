@@ -26,7 +26,8 @@ of "raw" pairs of source and destination file names.
 
 So, we should be able to get the expressive power of perl,
 combined with the safety features of `mmv`, and do all that
-while still keeping with a Unix tools philosophy.
+while avoiding problems with shell quoting and evaluation,
+and still keeping with a Unix tools philosophy.
 
 ## Other improvements
 
