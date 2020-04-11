@@ -48,7 +48,7 @@ my $dprint_fh = *STDERR;
 
 my $verbose = 0;
 my $debug   = 0;
-my $no_act  = 0;
+my $simulate  = 0;
 my $opt_k   = 0; # Like make -k -- keep working even in the presence of errors
 my $force   = 0;
 
@@ -63,8 +63,9 @@ my $wsep = '-';
 my %options = (
     'f|force'    => \$force,
     'k|continue' => \$opt_k,
-    'n|no-act'   => \$no_act,
-    'simulate'   => \$no_act,
+    'n|no-act'   => \$simulate,
+    'simulate'   => \$simulate,
+    'dry-run'    => \$simulate,
     'v|verbose'  => \$verbose,
     'd|debug'    => \$debug,
     'builtin'    => \$opt_builtin,
@@ -148,6 +149,46 @@ sub vis_string {
 
 sub encode_xnn {
     return vis_string(@_);
+}
+
+sub title_normalize {
+    my @title_words = ();
+    my $hyphenated_title;
+    my $last_word = $_[$#_];
+    my $ext;
+
+    if (defined($last_word) && $last_word =~ s{(\.\w+)\z}{}msx) {
+        $ext = $1;
+        $_[$#_] = $last_word;
+    }
+
+    for my $arg (@_) {
+        push(@title_words, split(/\s+/, $arg));
+    }
+
+    # Handle a few special case.
+    # There are some non-word characters that are common idioms
+    # and that lose their meaning when the general punctuation
+    # stripping and hyphenation rules are applied.
+    # For example, 'C++' reduces to 'C'.
+    #
+    for my $word (@title_words) {
+        if ($word eq 'C++') {
+            $word = 'Cxx';
+        }
+        elsif ($word eq 'c++') {
+            $word = 'c++';
+        }
+    }
+
+    $hyphenated_title = join('-', @title_words);
+    $hyphenated_title =~ s{\s+}{-}gmsx;
+    $hyphenated_title =~ s{[^-A-Za-z0-9_]}{-}gmsx;
+    $hyphenated_title =~ s{--+}{-}gmsx;
+    if (defined($ext)) {
+        $hyphenated_title .= $ext;
+    }
+    return $hyphenated_title;
 }
 
 sub hyphenate_word {
@@ -281,7 +322,7 @@ else {
     die "Usage: $0 [-v] [-n] [-f] [-k] perlexpr [filenames]\n"
 }
 
-if ($no_act) {
+if ($simulate) {
     $verbose = 1;
 }
 
@@ -323,7 +364,7 @@ if ($err > 0 && !$opt_k) {
     exit 1;
 }
 
-if ($no_act) {
+if ($simulate) {
     exit 0;
 }
 
